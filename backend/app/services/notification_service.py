@@ -1,9 +1,16 @@
-"""External notification service (Slack incoming webhook)."""
+"""External proposal delivery service (Resend email).
 
+Resend is used as the external email integration for this assessment. The
+application sends an approved proposal to the client's email after human
+approval. All email-sending logic stays isolated in this service; FastAPI
+route handlers never call the Resend SDK directly.
+"""
+
+import html
 import logging
-from datetime import datetime, timezone
+from decimal import Decimal
 
-import httpx
+import resend
 
 from app.core.config import get_settings
 from app.models.proposal import Proposal
@@ -14,53 +21,171 @@ settings = get_settings()
 
 
 class NotificationError(Exception):
-    """Raised when an external notification cannot be delivered."""
+    """Raised when the proposal email cannot be delivered."""
+
+    def __init__(self, message: str):
+        self.message = message
+        super().__init__(message)
 
 
-def send_slack_notification(proposal: Proposal) -> None:
-    """Post a concise approval/sent notification to the Slack webhook.
+def _fmt_money(value: Decimal | float | None) -> str:
+    if value is None:
+        return "—"
+    return f"${float(value):,.2f}"
+
+
+def _escape(value: str | None) -> str:
+    return html.escape(value or "")
+
+
+def _phrase(items: list[str] | None) -> str:
+    if not items:
+        return "<p><em>None noted.</em></p>"
+    return "<ul>" + "".join(f"<li>{_escape(i)}</li>" for i in items) + "</ul>"
+
+
+def _build_html(proposal: Proposal) -> str:
+    """Build a professional proposal email body. No internal details leaked."""
+    summary = _escape(proposal.project_summary) or "Your project is outlined below."
+    estimated_total = _fmt_money(proposal.estimated_total)
+
+    # Scope of work table based on the deterministic pricing breakdown.
+    priced = proposal.pricing_json or []
+    if priced:
+        rows = "".join(
+            "<tr>"
+            f"<td>{_escape(str(item.get('requested_work', '')))}</td>"
+            f"<td>{_escape(str(item.get('catalog_item_name', '')))}</td>"
+            f"<td>{_escape(str(item.get('quantity', 'TBD')))}</td>"
+            f"<td>{_escape(str(item.get('unit', '')))}</td>"
+            f"<td>{_fmt_money(_as_money(item.get('unit_price')))}</td>"
+            f"<td>{_fmt_money(_as_money(item.get('line_total')))}</td>"
+            "</tr>"
+            for item in priced
+        )
+        scope_html = (
+            "<table border='0' cellpadding='8' cellspacing='0' "
+            "style='width:100%;border-collapse:collapse;border:1px solid #ddd'>"
+            "<thead><tr style='background:#f0f2f5'>"
+            "<th style='text-align:left'>Requested Work</th>"
+            "<th style='text-align:left'>Item</th>"
+            "<th style='text-align:left'>Qty</th>"
+            "<th style='text-align:left'>Unit</th>"
+            "<th style='text-align:left'>Unit Price</th>"
+            "<th style='text-align:left'>Line Total</th>"
+            "</tr></thead>"
+            f"<tbody>{rows}</tbody></table>"
+        )
+    else:
+        scope_html = "<p><em>Scope details will be confirmed in the final proposal.</em></p>"
+
+    questions = (
+        _phrase(proposal.clarifying_questions_json)
+        if proposal.clarifying_questions_json
+        else "<p><em>None pending.</em></p>"
+    )
+
+    return f"""
+<div style="font-family:Arial,Helvetica,sans-serif;color:#1f2937;max-width:640px;margin:0 auto">
+  <h2 style="color:#1b6b4e">Greenscape Pro</h2>
+  <p>Hello {_escape(proposal.client_name)},</p>
+  <p>Thank you for the opportunity to design your outdoor space. We are pleased to
+     share the following proposal for your project at
+     <strong>{_escape(proposal.project_address)}</strong>.</p>
+
+  <h3 style="color:#1b6b4e">Project Summary</h3>
+  <p>{summary}</p>
+
+  <h3 style="color:#1b6b4e">Scope of Work</h3>
+  {scope_html}
+
+  <h3 style="color:#1b6b4e">Estimated Investment</h3>
+  <p style="font-size:1.25rem;font-weight:bold">{estimated_total}</p>
+
+  <h3 style="color:#1b6b4e">Assumptions / Items Requiring Confirmation</h3>
+  {_phrase(proposal.assumptions_json)}
+
+  <h3 style="color:#1b6b4e">Clarifying Questions</h3>
+  {questions}
+
+  <h3 style="color:#1b6b4e">Proposal Details</h3>
+  <div style="white-space:pre-wrap;background:#fafbfc;border:1px solid #e5e7eb;padding:16px;border-radius:8px">
+    {_escape(proposal.generated_proposal)}
+  </div>
+
+  <h3 style="color:#1b6b4e">Next Steps</h3>
+  <p>Review the summary above and let us know any questions or adjustments. Once
+     we confirm the details, we will schedule a start date. This is a draft
+     estimate pending your review and is not a binding quote.</p>
+
+  <p>We look forward to bringing your vision to life.</p>
+  <p>
+    <strong>Greenscape Pro</strong><br/>
+    Premium Residential Landscape &amp; Hardscape<br/>
+    Phoenix, Arizona
+  </p>
+</div>
+"""
+
+
+def _as_money(value) -> Decimal | float | None:
+    try:
+        if value is None:
+            return None
+        return Decimal(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def send_proposal_email(proposal: Proposal) -> None:
+    """Send an approved proposal to the client's email via Resend.
 
     Raises:
-        NotificationError: if no webhook is configured or the request fails.
+        NotificationError: if the email cannot be sent (config, invalid
+            recipient, Resend error, or network error).
     """
-    if not settings.slack_webhook_url:
+    if not settings.resend_api_key:
         raise NotificationError(
-            "SLACK_WEBHOOK_URL is not configured. The proposal was not marked as "
-            "SENT. Configure the webhook and retry sending."
+            "RESEND_API_KEY is not configured. The proposal was not sent. "
+            "Configure the key and retry sending."
+        )
+    if not settings.from_email:
+        raise NotificationError(
+            "FROM_EMAIL is not configured. The proposal was not sent. "
+            "Configure the sender and retry sending."
         )
 
-    timestamp = datetime.now(timezone.utc).isoformat()
-    payload = {
-        "text": (
-            "Greenscape Pro Proposal Approved\n"
-            f"Client: {proposal.client_name}\n"
-            f"Proposal ID: {proposal.id}\n"
-            f"Estimated Total: ${proposal.estimated_total or 0:,.2f}\n"
-            f"Status: Sent\n"
-            f"Timestamp: {timestamp}"
+    recipient = (proposal.client_email or "").strip()
+    if not recipient or "@" not in recipient:
+        raise NotificationError(
+            "The client does not have a valid email address. The proposal was not "
+            "sent. Update the client email and retry."
         )
-    }
+
+    subject = "Your Greenscape Pro Project Proposal"
+    html_body = _build_html(proposal)
 
     try:
-        response = httpx.post(
-            settings.slack_webhook_url,
-            json=payload,
-            timeout=10.0,
+        resend.api_key = settings.resend_api_key
+        response = resend.Emails.send(
+            {
+                "from": settings.from_email,
+                "to": [recipient],
+                "subject": subject,
+                "html": html_body,
+            }
         )
-    except httpx.HTTPError as exc:
-        logger.error("Slack webhook HTTP error: %s", exc)
+    except Exception as exc:
+        # Log a sanitized message server-side; never log the API key or headers.
+        logger.error(
+            "Resend email send failed for proposal id=%s: %s",
+            proposal.id,
+            type(exc).__name__,
+        )
         raise NotificationError(
-            "Slack notification failed due to a network error. "
-            "The proposal was not marked as SENT. Please retry."
+            "The proposal email could not be sent due to an external service "
+            "error. The proposal was not marked as SENT. Please retry."
         ) from exc
 
-    if response.status_code != 200:
-        logger.error(
-            "Slack webhook returned HTTP %s: %s", response.status_code, response.text
-        )
-        raise NotificationError(
-            f"Slack notification failed (HTTP {response.status_code}). "
-            "The proposal was not marked as SENT. Please retry."
-        )
-
-    logger.info("Slack notification sent for proposal id=%s", proposal.id)
+    logger.info("Proposal email sent to %s for proposal id=%s", recipient, proposal.id)
+    return response

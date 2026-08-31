@@ -228,18 +228,18 @@ export default function ProposalReview({
             onClick={onSend}
             disabled={disabled || !canSend(proposal.status)}
           >
-            Send Notification
+            Send Proposal Email
           </button>
         )}
 
         {proposal.status === "SENT" && proposal.sent_at && (
           <p className="sent-message">
-            Proposal sent on {new Date(proposal.sent_at).toLocaleString()}.
+            ✓ Proposal Sent on {new Date(proposal.sent_at).toLocaleString()}.
           </p>
         )}
 
         {proposal.status === "SENT" && !proposal.sent_at && (
-          <p className="sent-message">Proposal has been sent.</p>
+          <p className="sent-message">✓ Proposal Sent.</p>
         )}
       </section>
     </div>

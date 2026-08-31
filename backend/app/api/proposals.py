@@ -14,7 +14,7 @@ from app.schemas.proposal import (
     ProposalOut,
 )
 from app.services import ai_service, pricing_service
-from app.services.notification_service import NotificationError, send_slack_notification
+from app.services.notification_service import NotificationError, send_proposal_email
 
 logger = logging.getLogger(__name__)
 
@@ -169,10 +169,11 @@ def approve_proposal(proposal_id: int, db: Session = Depends(get_db)) -> Proposa
 
 @router.post("/{proposal_id}/send", response_model=ProposalOut)
 def send_proposal(proposal_id: int, db: Session = Depends(get_db)) -> Proposal:
-    """Send a proposal via Slack webhook. Requires APPROVED state."""
+    """Send an approved proposal via Resend email. Requires APPROVED state."""
     proposal = _get_proposal_or_404(db, proposal_id)
 
-    # The backend is the final authority on allowed transitions.
+    # The backend is the final authority on allowed transitions. Reject any
+    # state other than APPROVED, including SENT (no re-sending).
     if proposal.status != ProposalStatus.APPROVED:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -183,7 +184,7 @@ def send_proposal(proposal_id: int, db: Session = Depends(get_db)) -> Proposal:
         )
 
     try:
-        send_slack_notification(proposal)
+        send_proposal_email(proposal)
     except NotificationError as exc:
         # Do not mark SENT on failure. Preserve APPROVED so it can be retried.
         db.rollback()
@@ -199,5 +200,5 @@ def send_proposal(proposal_id: int, db: Session = Depends(get_db)) -> Proposal:
     proposal.sent_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(proposal)
-    logger.info("Sent proposal id=%s via Slack", proposal.id)
+    logger.info("Sent proposal id=%s via email", proposal.id)
     return proposal

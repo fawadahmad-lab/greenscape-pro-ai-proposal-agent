@@ -43,14 +43,15 @@ bottleneck would amplify it.
  PostgreSQL     Groq API
  (Supabase)     (LLM: scope extraction + drafting)
       \
-       Slack Webhook (send notification)
+       Resend (proposal email via API)
 ```
 
 - **Frontend** — React + Vite + TypeScript SPA, plain CSS, no component library.
 - **Backend** — FastAPI, SQLAlchemy 2.x, Pydantic v2, httpx.
 - **Database** — PostgreSQL (via Supabase in production).
 - **LLM** — Groq API directly (model from `GROQ_MODEL` env var).
-- **External integration** — Slack incoming webhook for send notifications.
+- **External integration** — Resend sends the approved proposal to the client's
+  email after human approval.
 
 ## Key Engineering Decisions
 
@@ -82,7 +83,7 @@ bottleneck would amplify it.
 | `GET` | `/api/proposals/{id}` | Full proposal details |
 | `POST` | `/api/proposals/{id}/generate` | AI scope extraction + pricing + draft |
 | `POST` | `/api/proposals/{id}/approve` | Human approval (`NEEDS_REVIEW` → `APPROVED`) |
-| `POST` | `/api/proposals/{id}/send` | Send via Slack (`APPROVED` → `SENT`) |
+| `POST` | `/api/proposals/{id}/send` | Send via Resend email (`APPROVED` → `SENT`) |
 
 ### Proposal status lifecycle
 
@@ -136,7 +137,8 @@ Backend (`backend/.env`):
 | `DATABASE_URL` | SQLAlchemy PostgreSQL connection string (Supabase in prod) |
 | `GROQ_API_KEY` | Groq API key for LLM calls |
 | `GROQ_MODEL` | Groq model name to use (e.g. `llama-3.3-70b-versatile`) |
-| `SLACK_WEBHOOK_URL` | Slack incoming-webhook URL for send notifications |
+| `RESEND_API_KEY` | Resend API key for sending proposal emails |
+| `FROM_EMAIL` | Resend sender address (e.g. `Greenscape Pro <proposals@mail.tokgrowthpartner.com>`) |
 | `CORS_ORIGINS` | Comma-separated allowed origins (no wildcard in production) |
 
 Frontend (`frontend/.env`):
@@ -203,9 +205,13 @@ Never commit `.env` files; they are git-ignored.
   provided** for this assessment. This implementation uses a representative
   **seeded demo pricing catalog** (20 clearly-labeled SAMPLE/DEMO items) so the
   deterministic pricing engine can be exercised end-to-end.
-- The **Slack webhook** is the representative external integration for this
-  assessment. In production, the send notification would integrate with
-  **GoHighLevel**, which the client stated is the primary system of record.
+- The **Resend** email service is used as the external email integration for
+  this assessment. The application sends an approved proposal to the client's
+  email after human approval.
+- **GoHighLevel** is Greenscape Pro's primary system of record. Resend is used
+  in this 24-hour assessment as a lightweight external email integration
+  demonstrating the outbound proposal workflow. A production implementation
+  would integrate this workflow with GoHighLevel.
 
 ## Trade-offs
 

@@ -105,26 +105,81 @@ def test_approve_from_needs_review_sets_timestamp(client, db_session):
     assert p.approved_at is not None
 
 
-def test_send_fails_when_slack_not_configured(client, db_session):
+def test_send_fails_when_resend_not_configured(client, db_session):
     p = _draft_proposal(
         db_session,
         status=ProposalStatus.APPROVED,
         approved_at=datetime.now(timezone.utc),
         estimated_total=1000,
     )
-    # Simulate the "no webhook configured" config error path.
+    # Simulate the "missing Resend config" error path.
     import app.services.notification_service as ns
-    original = ns.settings.slack_webhook_url
-    ns.settings.slack_webhook_url = None
+    original_send = ns.settings.resend_api_key
+    # Also ensure from_email is not None so the test isolates the API key check.
+    original_from = ns.settings.from_email
+    ns.settings.from_email = "Greenscape Pro <test@example.com>"
+    ns.settings.resend_api_key = None
     try:
         resp = client.post(f"/api/proposals/{p.id}/send")
     finally:
-        ns.settings.slack_webhook_url = original
+        ns.settings.resend_api_key = original_send
+        ns.settings.from_email = original_from
     assert resp.status_code == 502
     db_session.refresh(p)
     # NOT marked SENT; preserved as APPROVED for retry.
     assert p.status == ProposalStatus.APPROVED
     assert p.sent_at is None
+
+
+def test_send_fails_when_from_email_missing(client, db_session):
+    p = _draft_proposal(
+        db_session,
+        status=ProposalStatus.APPROVED,
+        approved_at=datetime.now(timezone.utc),
+        estimated_total=1000,
+    )
+    import app.services.notification_service as ns
+    original_key = ns.settings.resend_api_key
+    original_from = ns.settings.from_email
+    ns.settings.resend_api_key = "re_test"
+    ns.settings.from_email = None
+    try:
+        resp = client.post(f"/api/proposals/{p.id}/send")
+    finally:
+        ns.settings.resend_api_key = original_key
+        ns.settings.from_email = original_from
+    assert resp.status_code == 502
+    db_session.refresh(p)
+    assert p.status == ProposalStatus.APPROVED
+    assert p.sent_at is None
+
+
+def test_send_success_sets_sent_and_timestamp(client, db_session, monkeypatch):
+    p = _draft_proposal(
+        db_session,
+        status=ProposalStatus.APPROVED,
+        approved_at=datetime.now(timezone.utc),
+        estimated_total=25000,
+        client_email="fawadqureshi136@gmail.com",
+    )
+    import app.services.notification_service as ns
+    original_key = ns.settings.resend_api_key
+    original_from = ns.settings.from_email
+    ns.settings.resend_api_key = "re_test"
+    ns.settings.from_email = "Greenscape Pro <test@example.com>"
+    try:
+        # Mock the actual Resend API call so no real email is sent in tests.
+        monkeypatch.setattr(
+            "resend.Emails.send", lambda params: {"id": "mock-email-id"}
+        )
+        resp = client.post(f"/api/proposals/{p.id}/send")
+    finally:
+        ns.settings.resend_api_key = original_key
+        ns.settings.from_email = original_from
+    assert resp.status_code == 200
+    db_session.refresh(p)
+    assert p.status == ProposalStatus.SENT
+    assert p.sent_at is not None
 
 
 def test_generate_workflow_succeeds_and_sets_needs_review(seeded_client, seeded_db, monkeypatch):

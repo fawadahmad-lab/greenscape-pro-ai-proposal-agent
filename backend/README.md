@@ -21,7 +21,8 @@ On startup the app creates tables and seeds 20 demo pricing items.
 | `DATABASE_URL` | Yes | PostgreSQL connection string |
 | `GROQ_API_KEY` | Yes (for AI) | Groq API key |
 | `GROQ_MODEL` | No | Default `llama-3.3-70b-versatile` |
-| `SLACK_WEBHOOK_URL` | Yes (to send) | Slack incoming webhook |
+| `RESEND_API_KEY` | Yes (to send) | Resend API key for proposal emails |
+| `FROM_EMAIL` | Yes (to send) | Resend sender, e.g. `Greenscape Pro <proposals@mail.tokgrowthpartner.com>` |
 | `CORS_ORIGINS` | No | Comma-separated origins, default `http://localhost:5173` |
 
 ## Tests

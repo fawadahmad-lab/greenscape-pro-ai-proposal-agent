@@ -99,19 +99,52 @@ def _extract_scope_once(
     return _parse_scope(raw), raw
 
 
+def _extract_json_object(text: str) -> dict | None:
+    """Best-effort extraction of the first top-level JSON object in arbitrary
+    model output (handles markdown fences, code block tags, preamble prose,
+    and trailing commentary). Returns None if no valid object is found."""
+    source = text.strip()
+
+    # 1) Try the whole string first (fast path for clean output).
+    try:
+        parsed = json.loads(source)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    # 2) Locate the outermost balanced braces and try each candidate span,
+    #    choosing the longest one that parses as a JSON object.
+    stack: list[int] = []
+    spans: list[tuple[int, int]] = []
+    for i, ch in enumerate(source):
+        if ch == "{":
+            stack.append(i)
+        elif ch == "}":
+            if stack:
+                start = stack.pop()
+                spans.append((start, i + 1))
+
+    for end, start in sorted(
+        ((e - s, s) for s, e in spans), reverse=True
+    ):
+        start_i = start
+        end_i = start + end
+        candidate = source[start_i:end_i]
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            continue
+
+    return None
+
+
 def _parse_scope(raw: str) -> ScopeExtraction | None:
     """Parse raw model output into a validated ScopeExtraction, or None."""
-    cleaned = raw.strip()
-    # Strip markdown code fences if the model wrapped JSON in them.
-    if cleaned.startswith("```"):
-        cleaned = cleaned.strip("`")
-        # Remove a leading language tag like `json`.
-        if cleaned.startswith("json"):
-            cleaned = cleaned[4:]
-        cleaned = cleaned.strip()
-    try:
-        data = json.loads(cleaned)
-    except json.JSONDecodeError:
+    data = _extract_json_object(raw)
+    if data is None:
         logger.warning("AI returned non-JSON output; treating as parse failure.")
         return None
     try:

@@ -31,6 +31,32 @@ def test_parse_json_within_markdown_fence():
     assert scope.assumptions == ["a"]
 
 
+def test_parse_json_with_prose_preamble_and_trailer():
+    # The model occasionally prepends/append prose around the JSON.
+    raw = (
+        'Here is the scope for this project:\n'
+        '{"project_summary": "Patio", "scope_items": [], '
+        '"assumptions": ["a"], "clarifying_questions": [], "risk_flags": []}\n'
+        'Please review and let me know if you need changes.'
+    )
+    scope = _parse_scope(raw)
+    assert scope is not None
+    assert scope.project_summary == "Patio"
+
+
+def test_parse_json_with_triple_backtick_preamble():
+    raw = (
+        '```\n'
+        'Here is the JSON:\n'
+        '{"project_summary": "P", "scope_items": [], '
+        '"assumptions": [], "clarifying_questions": [], "risk_flags": []}\n'
+        '```'
+    )
+    scope = _parse_scope(raw)
+    assert scope is not None
+    assert scope.project_summary == "P"
+
+
 def test_parse_invalid_json_returns_none():
     assert _parse_scope("this is not json") is None
 

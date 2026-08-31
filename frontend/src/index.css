@@ -269,9 +269,16 @@ h2 {
 /* Detail layout */
 .info-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px 24px;
   margin: 0;
+}
+
+.info-grid > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
 }
 
 .info-grid dt {
@@ -279,11 +286,12 @@ h2 {
   text-transform: uppercase;
   letter-spacing: 0.4px;
   color: var(--color-text-muted);
-  margin-bottom: 3px;
 }
 .info-grid dd {
   margin: 0;
   font-weight: 600;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .review-sections {

@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     database_url: str
     groq_api_key: str | None = None
     groq_model: str = "llama-3.3-70b-versatile"
+    groq_extract_max_attempts: int = 2
     resend_api_key: str | None = None
     from_email: str | None = None
     cors_origins: str = "http://localhost:5173"

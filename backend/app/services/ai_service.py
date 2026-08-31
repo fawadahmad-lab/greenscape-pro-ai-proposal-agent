@@ -13,7 +13,7 @@ from typing import Sequence
 
 from pydantic import ValidationError
 
-from groq import Groq
+from groq import Groq, GroqError
 
 from app.core.config import get_settings
 from app.models.pricing_item import PricingItem
@@ -22,8 +22,6 @@ from app.schemas.proposal import PricingBreakdown, ScopeExtraction
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
-
-MAX_RETRIES = 1
 
 
 def _client() -> Groq:
@@ -47,20 +45,31 @@ def _catalog_context(catalog: Sequence[PricingItem]) -> str:
 
 
 def _extract_scope_once(
-    notes: str, catalog_context: str
+    notes: str, catalog_context: str, retry: bool = False
 ) -> tuple[ScopeExtraction | None, str]:
     """Call Groq once; return (validated_scope, raw_text)."""
-    system_prompt = (
-        "You are an expert estimator for a premium residential landscape and "
-        "hardscape design-build company in Phoenix, Arizona. You interpret "
-        "unstructured site-walk notes and convert them into a structured "
-        "project scope.\n\n"
+    base_rules = (
         "Rules:\n"
         "- Do NOT invent project details. If information is missing or ambiguous, "
         "record it as an assumption, clarifying question, or risk flag.\n"
         "- Only set a quantity when it is explicitly stated or can be reasonably "
         "inferred from the notes. Otherwise leave it null and flag uncertainty.\n"
         "- Map each requested work item to the closest catalog item by name.\n"
+    )
+    if retry:
+        # Stronger explicit instruction used for the single controlled retry.
+        base_rules += (
+            "- CRITICAL: The site-walk notes describe real, concrete work. You MUST "
+            "map every distinct task into its own entry in scope_items. Never return "
+            "an empty scope_items array when the notes describe specific work, and "
+            "never omit a requested task from the notes.\n"
+        )
+    system_prompt = (
+        "You are an expert estimator for a premium residential landscape and "
+        "hardscape design-build company in Phoenix, Arizona. You interpret "
+        "unstructured site-walk notes and convert them into a structured "
+        "project scope.\n\n"
+        f"{base_rules}"
         "- Respond with STRICT JSON ONLY, no prose, matching this schema:\n"
         '{\n'
         '  "project_summary": "string",\n'
@@ -87,14 +96,33 @@ def _extract_scope_once(
     )
 
     client = _client()
-    response = client.chat.completions.create(
-        model=settings.groq_model,
-        messages=[
+    try:
+        return _chat_scope_completion(
+            client, system_prompt, user_prompt, {"type": "json_object"}
+        )
+    except GroqError:
+        # JSON mode can intermittently fail validation on some models. Fall
+        # back to a plain completion within the same attempt so a transient
+        # JSON-mode failure does not waste an attempt.
+        logger.warning("JSON mode failed; falling back to plain completion.")
+        return _chat_scope_completion(client, system_prompt, user_prompt, None)
+
+
+def _chat_scope_completion(
+    client, system_prompt: str, user_prompt: str, response_format
+) -> tuple[ScopeExtraction | None, str]:
+    """Run one scope chat completion; return (validated_scope, raw_text)."""
+    kwargs: dict = {
+        "model": settings.groq_model,
+        "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        temperature=0.2,
-    )
+        "temperature": 0.2,
+    }
+    if response_format is not None:
+        kwargs["response_format"] = response_format
+    response = client.chat.completions.create(**kwargs)
     raw = response.choices[0].message.content or ""
     return _parse_scope(raw), raw
 
@@ -155,23 +183,56 @@ def _parse_scope(raw: str) -> ScopeExtraction | None:
 
 
 def extract_scope(notes: str, catalog: Sequence[PricingItem]) -> ScopeExtraction:
-    """Extract structured scope with one controlled repair/retry."""
+    """Extract structured scope with deterministic validation and one retry.
+
+    The retry is only triggered for empty/malformed/clearly-inconsistent output.
+    Valid output that contains TBD quantities or prices is accepted as-is (it is
+    a legitimate result and must NOT be retried).
+    """
     catalog_context = _catalog_context(catalog)
+    max_attempts = max(1, settings.groq_extract_max_attempts)
 
-    scope, raw = _extract_scope_once(notes, catalog_context)
-    attempt = 0
-    while scope is None and attempt < MAX_RETRIES:
-        logger.info("Retrying scope extraction (attempt %d).", attempt + 1)
-        scope, raw = _extract_scope_once(notes, catalog_context)
-        attempt += 1
-
-    if scope is None:
-        logger.error("Scope extraction failed after retries. Raw tail: %s", raw[-500:])
-        raise ValueError(
-            "The AI could not produce a valid structured scope from these notes. "
-            "Please review the notes and try again, or run generation again later."
+    for attempt in range(1, max_attempts + 1):
+        scope = None
+        raw = ""
+        try:
+            scope, raw = _extract_scope_once(
+                notes, catalog_context, retry=attempt > 1
+            )
+        except GroqError as exc:
+            logger.warning(
+                "Scope extraction attempt %d/%d raised Groq API error: %s",
+                attempt,
+                max_attempts,
+                exc,
+            )
+            continue
+        reason = _scope_reason(scope, raw)
+        if reason is None:
+            return scope
+        logger.warning(
+            "Scope extraction attempt %d/%d failed: %s",
+            attempt,
+            max_attempts,
+            reason,
         )
-    return scope
+
+    logger.error("Scope extraction failed after %d attempts.", max_attempts)
+    raise ValueError(
+        "The AI could not produce a valid structured scope from these notes. "
+        "Please review the notes and try again, or run generation again later."
+    )
+
+
+def _scope_reason(scope: ScopeExtraction | None, raw: str) -> str | None:
+    """Return a human-readable failure reason, or None if the scope is usable."""
+    if scope is None:
+        return "no valid JSON scope returned" if not raw.strip() else "malformed output"
+    if len(scope.scope_items) == 0:
+        return "scope contained no scope items"
+    if not (scope.project_summary or "").strip():
+        return "scope contained no project summary"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -190,7 +251,7 @@ def generate_proposal_draft(
     line_items_text = "\n".join(
         f"- {item.requested_work} | {item.catalog_item_name} | "
         f"qty {item.quantity if item.quantity is not None else 'TBD'} {item.unit} | "
-        f"${item.line_total:,.2f}"
+        f"{'$' + format(item.line_total, ',.2f') if item.line_total is not None else 'TBD'}"
         for item in breakdown.line_items
     )
 
@@ -201,16 +262,29 @@ def generate_proposal_draft(
     risks_text = "\n".join(f"- {r}" for r in scope.risk_flags) or "- None noted."
 
     system_prompt = (
-        "You are a senior proposal writer for a premium residential landscape and "
-        "hardscape design-build company in Phoenix, Arizona. Write a clear, "
-        "professional, high-end proposal draft.\n\n"
+        "You are a senior proposal writer for Greenscape Pro, a premium "
+        "residential landscape and hardscape design-build company in Phoenix, "
+        "Arizona. Write a clear, professional, high-end proposal draft.\n\n"
         "Rules:\n"
+        "- The company is Greenscape Pro - Premium Residential Landscape & "
+        "Hardscape Design-Build, Phoenix, Arizona. Use this exact identity; do "
+        "NOT place core line items too high in the document.\n"
         "- Base the proposal ONLY on the provided structured scope and pricing.\n"
         "- Do NOT invent guarantees, permit approvals, or HOA approvals.\n"
         "- Clearly label the result as a DRAFT ESTIMATE pending final human review.\n"
         "- Organize the proposal into these sections: Project Overview, Scope of "
         "Work, Estimated Investment, Assumptions / Items Requiring Confirmation, "
         "and Next Steps.\n"
+        "- NEVER use placeholder brackets such as [Your Company Name], [Your "
+        "Name], [Contact Information], or [Your Location]. Use only the company "
+        "identity above. If an employee/contact name is unknown, omit it rather "
+        "than leaving a placeholder.\n"
+    )
+
+    estimated_text = (
+        f"${breakdown.estimated_total:,.2f}"
+        if breakdown.estimated_total is not None
+        else "TBD (all items pending pricing)"
     )
 
     user_prompt = (
@@ -219,7 +293,7 @@ def generate_proposal_draft(
         f"Project summary: {project_summary}\n\n"
         "Scope of work:\n"
         f"{line_items_text}\n\n"
-        f"Estimated total: ${breakdown.estimated_total:,.2f}\n\n"
+        f"Estimated investment (priced items only): {estimated_text}\n\n"
         "Assumptions:\n"
         f"{assumptions_text}\n\n"
         "Clarifying questions:\n"

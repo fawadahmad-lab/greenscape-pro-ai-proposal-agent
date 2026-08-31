@@ -34,8 +34,70 @@ def _fmt_money(value: Decimal | float | None) -> str:
     return f"${float(value):,.2f}"
 
 
+def _tbd_or_money(value: Decimal | float | None) -> str:
+    """Render a monetary value as TBD when unknown, else a formatted amount."""
+    if value is None:
+        return "TBD"
+    return f"${float(value):,.2f}"
+
+
+def _tbd_or_num(value) -> str:
+    """Render a numeric value as TBD when unknown, else the plain number. Never
+    prints a literal 'None'."""
+    if value is None:
+        return "TBD"
+    return str(value)
+
+
+_SERVICE_STATES = {
+    "Arizona": "AZ",
+    "AZ": "AZ",
+    "Phoenix": "Phoenix",
+    "Scottsdale": "Phoenix",
+    "Tempe": "Phoenix",
+    "Mesa": "Phoenix",
+    "Chandler": "Phoenix",
+    "Gilbert": "Phoenix",
+    "Peoria": "Phoenix",
+    "Surprise": "Phoenix",
+    "Avondale": "Phoenix",
+}
+
+
+def _is_in_service_area(address: str | None) -> bool:
+    """Return True if the address looks like it is within the Phoenix metro area."""
+    if not address:
+        return True
+    lowered = address.lower()
+    return any(anchor.lower() in lowered for anchor in _SERVICE_STATES)
+
+
 def _escape(value: str | None) -> str:
     return html.escape(value or "")
+
+
+_PLACEHOLDER_PATTERNS = [
+    r"\[Your Company Name\]",
+    r"\[Your Name\]",
+    r"\[Contact Information\]",
+    r"\[Your Location\]",
+    r"\[(?:Your|Company|Client)[^\]]*\]",
+]
+
+
+def _scrub_placeholders(text: str | None) -> str:
+    """Remove leftover placeholder brackets (e.g. [Your Company Name]) so they
+    never reach the client. Unknown fields are omitted rather than shown."""
+    import re
+
+    cleaned = (text or "")
+    for pattern in _PLACEHOLDER_PATTERNS:
+        cleaned = re.sub(pattern, "", cleaned)
+    # Collapse any leftover empty brackets and blank lines.
+    cleaned = re.sub(r"\[\s*\]", "", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    return cleaned.strip()
 
 
 def _phrase(items: list[str] | None) -> str:
@@ -45,21 +107,26 @@ def _phrase(items: list[str] | None) -> str:
 
 
 def _build_html(proposal: Proposal) -> str:
-    """Build a professional proposal email body. No internal details leaked."""
-    summary = _escape(proposal.project_summary) or "Your project is outlined below."
-    estimated_total = _fmt_money(proposal.estimated_total)
+    """Build a concise, email-safe proposal email from structured data only.
 
-    # Scope of work table based on the deterministic pricing breakdown.
+    The full detailed Markdown proposal is NOT included here; it is rendered
+    only in the web application's Proposal Detail page. This email is a clean,
+    semantically structured HTML summary with inline styles for compatibility
+    across major email clients.
+    """
+    summary = _escape(proposal.project_summary) or "Your project is outlined below."
+
+    # --- Scope of Work table ------------------------------------------------
     priced = proposal.pricing_json or []
     if priced:
         rows = "".join(
             "<tr>"
             f"<td>{_escape(str(item.get('requested_work', '')))}</td>"
             f"<td>{_escape(str(item.get('catalog_item_name', '')))}</td>"
-            f"<td>{_escape(str(item.get('quantity', 'TBD')))}</td>"
+            f"<td>{_escape(_tbd_or_num(item.get('quantity')))}</td>"
             f"<td>{_escape(str(item.get('unit', '')))}</td>"
-            f"<td>{_fmt_money(_as_money(item.get('unit_price')))}</td>"
-            f"<td>{_fmt_money(_as_money(item.get('line_total')))}</td>"
+            f"<td>{_tbd_or_money(_as_money(item.get('unit_price')))}</td>"
+            f"<td>{_tbd_or_money(_as_money(item.get('line_total')))}</td>"
             "</tr>"
             for item in priced
         )
@@ -76,13 +143,56 @@ def _build_html(proposal: Proposal) -> str:
             "</tr></thead>"
             f"<tbody>{rows}</tbody></table>"
         )
+        tbd_items = [
+            str(item.get("requested_work", ""))
+            for item in priced
+            if _as_money(item.get("line_total")) is None
+        ]
     else:
         scope_html = "<p><em>Scope details will be confirmed in the final proposal.</em></p>"
+        tbd_items = []
+
+    # --- Items Pending Pricing (distinct section) ---------------------------
+    if tbd_items:
+        pending_html = (
+            "<ul>"
+            + "".join(f"<li>{_escape(i)}</li>" for i in tbd_items)
+            + "</ul>"
+        )
+    else:
+        pending_html = ""
+
+    # --- Estimated Investment — Priced Items --------------------------------
+    if proposal.estimated_total is not None:
+        investment_html = (
+            "<p style='font-size:1.25rem;font-weight:bold'>"
+            f"{_fmt_money(proposal.estimated_total)}</p>"
+            "<p style='color:#6b7280;font-size:0.85rem'>Additional TBD items are "
+            "not included in this total and will be priced after quantities are "
+            "confirmed.</p>"
+        )
+    else:
+        investment_html = (
+            "<p style='color:#6b7280'>Pricing pending final quantities; an "
+            "estimate will be provided once items are confirmed.</p>"
+        )
+
+    # --- Geographic assumption: flag out-of-area, never alter the address ----
+    additional_assumptions = []
+    if not _is_in_service_area(proposal.project_address):
+        additional_assumptions.append(
+            "The project address appears to be outside Greenscape Pro's "
+            "Phoenix, Arizona service area. Service availability, travel, and "
+            "permitting should be confirmed before proceeding."
+        )
+
+    assumptions = list(proposal.assumptions_json or []) + additional_assumptions
+    assumptions_html = (_phrase(assumptions) if assumptions else "")
 
     questions = (
         _phrase(proposal.clarifying_questions_json)
         if proposal.clarifying_questions_json
-        else "<p><em>None pending.</em></p>"
+        else ""
     )
 
     return f"""
@@ -99,29 +209,26 @@ def _build_html(proposal: Proposal) -> str:
   <h3 style="color:#1b6b4e">Scope of Work</h3>
   {scope_html}
 
-  <h3 style="color:#1b6b4e">Estimated Investment</h3>
-  <p style="font-size:1.25rem;font-weight:bold">{estimated_total}</p>
+  {("<h3 style='color:#1b6b4e'>Items Pending Pricing</h3>\n  " + pending_html) if pending_html else ""}
 
-  <h3 style="color:#1b6b4e">Assumptions / Items Requiring Confirmation</h3>
-  {_phrase(proposal.assumptions_json)}
+  <h3 style="color:#1b6b4e">Estimated Investment — Priced Items</h3>
+  {investment_html}
 
-  <h3 style="color:#1b6b4e">Clarifying Questions</h3>
-  {questions}
+  {("<h3 style='color:#1b6b4e'>Assumptions / Items Requiring Confirmation</h3>\n  " + assumptions_html) if assumptions_html else ""}
 
-  <h3 style="color:#1b6b4e">Proposal Details</h3>
-  <div style="white-space:pre-wrap;background:#fafbfc;border:1px solid #e5e7eb;padding:16px;border-radius:8px">
-    {_escape(proposal.generated_proposal)}
-  </div>
+  {("<h3 style='color:#1b6b4e'>Clarifying Questions</h3>\n  " + questions) if questions else ""}
 
   <h3 style="color:#1b6b4e">Next Steps</h3>
   <p>Review the summary above and let us know any questions or adjustments. Once
-     we confirm the details, we will schedule a start date. This is a draft
-     estimate pending your review and is not a binding quote.</p>
+     we confirm the details, we will schedule a start date for the project.</p>
+
+  <p style="color:#6b7280;font-size:0.85rem">This is a draft estimate pending your
+     review and is not a binding quote.</p>
 
   <p>We look forward to bringing your vision to life.</p>
   <p>
     <strong>Greenscape Pro</strong><br/>
-    Premium Residential Landscape &amp; Hardscape<br/>
+    Premium Residential Landscape &amp; Hardscape Design-Build<br/>
     Phoenix, Arizona
   </p>
 </div>

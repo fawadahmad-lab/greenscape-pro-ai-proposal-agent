@@ -33,17 +33,14 @@ def _catalog():
 
 
 def test_line_total_simple():
-    item = PricingItem(
-        name="Test", category="c", unit="u", unit_price=18.0
-    )
-    assert compute_line_total(item, 500) == 9000.0
+    assert compute_line_total(18.0, 500) == 9000.0
 
 
-def test_line_total_missing_quantity_is_zero():
-    item = PricingItem(
-        name="Test", category="c", unit="u", unit_price=18.0
-    )
-    assert compute_line_total(item, None) == 0.0
+def test_line_total_missing_quantity_is_tbd():
+    # Unknown quantity -> TBD, not $0.00.
+    assert compute_line_total(18.0, None) is None
+    # Unknown unit price -> TBD, not $0.00.
+    assert compute_line_total(None, 500) is None
 
 
 def test_match_catalog_item_exact():
@@ -84,6 +81,7 @@ def test_breakdown_sums_line_totals_deterministically():
     # 500 * 18 + 300 * 9.50 = 9000 + 2850 = 11850
     assert breakdown.estimated_total == 11850.0
     assert len(breakdown.line_items) == 2
+    assert all(item.is_priced for item in breakdown.line_items)
 
 
 def test_breakdown_marks_uncertain_quantity():
@@ -102,7 +100,12 @@ def test_breakdown_marks_uncertain_quantity():
     item = breakdown.line_items[0]
     assert item.quantity is None
     assert item.quantity_uncertain is True
-    assert item.line_total == 0.0
+    assert item.is_priced is False
+    # TBD quantity -> line total and unit price are unknown, not $0.00.
+    assert item.line_total is None
+    assert item.unit_price is None
+    # All items TBD -> estimated_total is null.
+    assert breakdown.estimated_total is None
 
 
 def test_breakdown_unmatched_item_flagged_not_priced():
@@ -120,4 +123,35 @@ def test_breakdown_unmatched_item_flagged_not_priced():
     breakdown = build_pricing_breakdown(scope, _catalog())
     item = breakdown.line_items[0]
     assert item.catalog_item_name == "Unmatched"
-    assert item.line_total == 0.0
+    assert item.is_priced is False
+    assert item.line_total is None
+    assert breakdown.estimated_total is None
+
+
+def test_breakdown_mixed_priced_and_tbd_total_is_priced_only():
+    scope = ScopeExtraction(
+        project_summary="Patio + lighting",
+        scope_items=[
+            ScopeItem(
+                requested_work="Add paver patio",
+                catalog_item_name="Paver Patio Installation",
+                quantity=700,
+                confidence=0.95,
+            ),
+            ScopeItem(
+                requested_work="Add lighting",
+                catalog_item_name="Lighting",
+                quantity=None,
+                confidence=0.2,
+            ),
+        ],
+    )
+    breakdown = build_pricing_breakdown(scope, _catalog())
+    priced = [i for i in breakdown.line_items if i.is_priced]
+    tbd = [i for i in breakdown.line_items if not i.is_priced]
+    # Only the priced patio (700 * 18 = 12600) contributes to the total.
+    assert breakdown.estimated_total == 12600.0
+    assert len(priced) == 1
+    assert len(tbd) == 1
+    assert tbd[0].line_total is None
+    assert tbd[0].unit_price is None

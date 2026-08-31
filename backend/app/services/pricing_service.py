@@ -46,44 +46,56 @@ def match_catalog_item(
     return None
 
 
-def compute_line_total(item: PricingItem, quantity: float | None) -> float:
-    """Return quantity * unit_price. If quantity is missing, line_total is 0."""
-    if quantity is None:
-        return 0.0
-    return round(quantity * float(item.unit_price), 2)
+def compute_line_total(
+    unit_price: float | None, quantity: float | None
+) -> float | None:
+    """Return quantity * unit_price, or None if either is unknown (TBD)."""
+    if unit_price is None or quantity is None:
+        return None
+    return round(quantity * unit_price, 2)
 
 
 def build_pricing_breakdown(
     scope: ScopeExtraction, catalog: Sequence[PricingItem]
 ) -> PricingBreakdown:
-    """Convert validated AI scope into deterministic pricing."""
+    """Convert validated AI scope into deterministic pricing.
+
+    A line item is "priced" (Quantum contributes to the total) only when both a
+    numeric quantity and a known unit price are present. Otherwise it is a TBD
+    item: it stays visible with unit_price/line_total of None (rendered as TBD)
+    and is excluded from estimated_total. estimated_total is null when no item
+    is priced.
+    """
     line_items: list[PricedLineItem] = []
     for scope_item in scope.scope_items:
         matched = match_catalog_item(
             scope_item.requested_work, scope_item.catalog_item_name, catalog
         )
         if matched is None:
-            logger.warning(
-                "No catalog match for scope item: %s", scope_item.requested_work
-            )
             line_items.append(
                 PricedLineItem(
                     requested_work=scope_item.requested_work,
                     catalog_item_name="Unmatched",
                     category="Unmatched",
                     unit="",
-                    unit_price=0.0,
+                    unit_price=None,
                     quantity=scope_item.quantity,
-                    line_total=0.0,
+                    line_total=None,
                     confidence=scope_item.confidence,
                     quantity_uncertain=True,
+                    is_priced=False,
                     notes="No matching catalog item found. Requires manual pricing.",
                 )
             )
             continue
 
         quantity = scope_item.quantity
-        quantity_uncertain = quantity is None or scope_item.confidence < QUANTITY_UNCERTAIN_THRESHOLD
+        unit_price = float(matched.unit_price)
+        line_total = compute_line_total(unit_price, quantity)
+        is_priced = line_total is not None
+        quantity_uncertain = (
+            quantity is None or scope_item.confidence < QUANTITY_UNCERTAIN_THRESHOLD
+        )
 
         line_items.append(
             PricedLineItem(
@@ -91,16 +103,18 @@ def build_pricing_breakdown(
                 catalog_item_name=matched.name,
                 category=matched.category,
                 unit=matched.unit,
-                unit_price=float(matched.unit_price),
+                unit_price=unit_price if is_priced else None,
                 quantity=quantity,
-                line_total=compute_line_total(matched, quantity),
+                line_total=line_total,
                 confidence=scope_item.confidence,
-                quantity_uncertain=quantity_uncertain,
+                quantity_uncertain=quantity_uncertain or not is_priced,
+                is_priced=is_priced,
                 notes=scope_item.notes,
             )
         )
 
-    estimated_total = round(sum(item.line_total for item in line_items), 2)
+    priced = [item.line_total for item in line_items if item.is_priced]
+    estimated_total = round(sum(priced), 2) if priced else None
     return PricingBreakdown(line_items=line_items, estimated_total=estimated_total)
 
 

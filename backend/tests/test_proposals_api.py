@@ -5,7 +5,12 @@ from datetime import datetime, timezone
 from app.models.proposal import Proposal, ProposalStatus
 from app.services import ai_service
 from app.services.notification_service import NotificationError
-from app.schemas.proposal import ScopeExtraction, PricingBreakdown, PricedLineItem
+from app.schemas.proposal import (
+    ScopeExtraction,
+    ScopeItem,
+    PricingBreakdown,
+    PricedLineItem,
+)
 
 
 def _draft_proposal(db, **overrides):
@@ -187,7 +192,14 @@ def test_generate_workflow_succeeds_and_sets_needs_review(seeded_client, seeded_
 
     scope = ScopeExtraction(
         project_summary="Test patio project.",
-        scope_items=[],
+        scope_items=[
+            ScopeItem(
+                requested_work="Add paver patio",
+                catalog_item_name="Paver Patio Installation",
+                quantity=500,
+                confidence=0.9,
+            )
+        ],
         assumptions=["Assumption"],
         clarifying_questions=["Question"],
         risk_flags=["Risk"],
@@ -206,6 +218,32 @@ def test_generate_workflow_succeeds_and_sets_needs_review(seeded_client, seeded_
     assert data["project_summary"] == "Test patio project."
     assert data["generated_proposal"] == "# Draft Proposal\n\nOverview."
     assert data["estimated_total"] is not None
+    assert len(data["scope_json"]) == 1
+
+
+def test_generate_empty_scope_marks_failed_not_silent_success(
+    seeded_client, seeded_db, monkeypatch
+):
+    # An AI scope with zero items must NOT be silently persisted as a valid
+    # proposal (which previously produced "No specific tasks" / $0.00). It
+    # should be marked FAILED so a human can review the notes and retry.
+    p = _draft_proposal(seeded_db)
+
+    empty_scope = ScopeExtraction(
+        project_summary="",
+        scope_items=[],
+    )
+    monkeypatch.setattr(ai_service, "extract_scope", lambda notes, catalog: empty_scope)
+
+    resp = seeded_client.post(f"/api/proposals/{p.id}/generate")
+    assert resp.status_code == 500
+    seeded_db.refresh(p)
+    assert p.status == ProposalStatus.FAILED
+    body = resp.json()
+    assert "No specific tasks" not in body["detail"]
+    body_str = str(body).lower()
+    assert "traceback" not in body_str
+    assert "groq_api_key" not in body_str
 
 
 def test_generate_failure_marks_failed(seeded_client, seeded_db, monkeypatch):

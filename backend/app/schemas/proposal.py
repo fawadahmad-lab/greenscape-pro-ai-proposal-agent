@@ -115,16 +115,22 @@ class PricedLineItem(BaseModel):
     catalog_item_name: str
     category: str
     unit: str
-    unit_price: float
+    unit_price: float | None
     quantity: float | None
-    line_total: float
+    line_total: float | None
     confidence: float
     quantity_uncertain: bool = False
+    is_priced: bool = True
     notes: str = ""
 
 
 class PricingBreakdown(BaseModel):
-    """Deterministically calculated pricing breakdown."""
+    """Deterministically calculated pricing breakdown.
+
+    estimated_total is the sum of priced line items only. It is null when no
+    line item has a known quantity and unit price (all TBD). TBD items are
+    kept visible and are never shown as $0.00.
+    """
 
     line_items: list[PricedLineItem]
-    estimated_total: float
+    estimated_total: float | None

@@ -1,4 +1,5 @@
 import StatusBadge from "./StatusBadge";
+import ProposalMarkdown from "./ProposalMarkdown";
 import type { Proposal, ProposalStatus } from "../types/proposal";
 
 interface ProposalReviewProps {
@@ -11,7 +12,7 @@ interface ProposalReviewProps {
 }
 
 function formatCurrency(value: number | null): string {
-  if (value === null || value === undefined) return "—";
+  if (value === null || value === undefined) return "TBD";
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
@@ -21,6 +22,18 @@ function formatCurrency(value: number | null): string {
 function formatQuantity(q: number | null): string {
   if (q === null || q === undefined) return "TBD";
   return q.toLocaleString("en-US");
+}
+
+function formatDateTime(value: string): string {
+  if (!value) return "";
+  const d = new Date(value);
+  return d.toLocaleString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 export function canGenerate(status: ProposalStatus): boolean {
@@ -43,18 +56,24 @@ export default function ProposalReview({
   onSend,
   error,
 }: ProposalReviewProps) {
+  const pricedItems = proposal.pricing_json ?? [];
+  const tbdItems = pricedItems.filter((item) => !item.is_priced);
+
   return (
     <div className="proposal-detail">
+      {/* Client Information */}
       <section className="card">
-        <h2>Client Information</h2>
+        <h2 className="section-title">Client Information</h2>
         <dl className="info-grid">
           <div>
-            <dt>Name</dt>
+            <dt>Client Name</dt>
             <dd>{proposal.client_name}</dd>
           </div>
           <div>
             <dt>Email</dt>
-            <dd>{proposal.client_email}</dd>
+            <dd>
+              <a href={`mailto:${proposal.client_email}`}>{proposal.client_email}</a>
+            </dd>
           </div>
           <div>
             <dt>Address</dt>
@@ -69,111 +88,141 @@ export default function ProposalReview({
         </dl>
       </section>
 
+      {/* Site Walk Notes */}
       <section className="card">
-        <h2>Original Site Walk Notes</h2>
-        <p className="pre-wrap notes">{proposal.site_walk_notes}</p>
+        <h2 className="section-title">Site Walk Notes</h2>
+        <div className="notes pre-wrap">{proposal.site_walk_notes}</div>
       </section>
 
-      {proposal.project_summary && (
-        <section className="card">
-          <h2>AI Project Summary</h2>
-          <p>{proposal.project_summary}</p>
-        </section>
-      )}
+      {/* Generated Proposal */}
+      <section className="card">
+        <h2 className="section-title">Generated Proposal</h2>
 
-      {proposal.scope_json && proposal.scope_json.length > 0 && (
-        <section className="card">
-          <h2>Scope of Work</h2>
-          <table className="detail-table">
-            <thead>
-              <tr>
-                <th>Requested Work</th>
-                <th>Pricing Item</th>
-                <th>Qty</th>
-                <th>Unit</th>
-                <th>Unit Price</th>
-                <th>Line Total</th>
-                <th>Confidence</th>
-              </tr>
-            </thead>
-            <tbody>
-              {proposal.scope_json.map((item, idx) => {
-                const priced = proposal.pricing_json?.[idx];
-                return (
-                  <tr key={idx}>
-                    <td>{item.requested_work}</td>
-                    <td>
-                      {priced?.catalog_item_name ?? item.catalog_item_name ?? "Unmatched"}
-                      {priced?.quantity_uncertain && (
-                        <span className="uncertain-tag" title="Quantity requires confirmation">
-                          needs qty
-                        </span>
-                      )}
-                    </td>
-                    <td>{priced ? formatQuantity(priced.quantity) : formatQuantity(item.quantity)}</td>
-                    <td>{priced?.unit ?? ""}</td>
-                    <td>{priced ? formatCurrency(priced.unit_price) : "—"}</td>
-                    <td>{priced ? formatCurrency(priced.line_total) : "—"}</td>
-                    <td>{Math.round((priced?.confidence ?? item.confidence) * 100)}%</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          <div className="total-row">
-            <strong>Estimated Total</strong>
-            <strong>{formatCurrency(proposal.estimated_total)}</strong>
+        {proposal.project_summary && (
+          <p className="project-summary">{proposal.project_summary}</p>
+        )}
+
+        {proposal.scope_json && proposal.scope_json.length > 0 && (
+          <div className="table-scroll">
+            <table className="detail-table">
+              <thead>
+                <tr>
+                  <th>Requested Work</th>
+                  <th>Pricing Item</th>
+                  <th>Qty</th>
+                  <th>Unit</th>
+                  <th>Unit Price</th>
+                  <th>Line Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {proposal.scope_json.map((item, idx) => {
+                  const priced = proposal.pricing_json?.[idx];
+                  return (
+                    <tr key={idx}>
+                      <td>{item.requested_work}</td>
+                      <td>
+                        {priced?.catalog_item_name ??
+                          item.catalog_item_name ??
+                          "Unmatched"}
+                        {!priced?.is_priced && (
+                          <span
+                            className="uncertain-tag"
+                            title="Quantity or price requires confirmation"
+                          >
+                            TBD
+                          </span>
+                        )}
+                      </td>
+                      <td>{formatQuantity(priced?.quantity ?? item.quantity)}</td>
+                      <td>{priced?.unit ?? ""}</td>
+                      <td>{formatCurrency(priced?.unit_price ?? null)}</td>
+                      <td>{formatCurrency(priced?.line_total ?? null)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
+        )}
+
+        {proposal.estimated_total !== null &&
+          proposal.estimated_total !== undefined && (
+            <div className="total-row">
+              <strong>Estimated Investment — Priced Items</strong>
+              <strong>{formatCurrency(proposal.estimated_total)}</strong>
+            </div>
+          )}
+
+        {tbdItems.length > 0 && (
           <p className="hint">
-            Pricing is calculated deterministically in application code and labeled
-            as a draft estimate pending final human review. Demo/sample catalog only.
+            Additional TBD items are not included in this total and will be priced
+            after quantities are confirmed.
           </p>
-        </section>
+        )}
+
+        {proposal.generated_proposal && (
+          <div className="proposal-draft">
+            <ProposalMarkdown content={proposal.generated_proposal} />
+          </div>
+        )}
+      </section>
+
+      {/* Assumptions / Clarifying Questions / Risks */}
+      {(proposal.assumptions_json?.length ?? 0) +
+        (proposal.clarifying_questions_json?.length ?? 0) +
+        (proposal.risk_flags_json?.length ?? 0) >
+        0 && (
+        <div className="review-sections">
+          {(proposal.assumptions_json?.length ?? 0) > 0 && (
+            <section className="card">
+              <h2 className="section-title">Assumptions</h2>
+              <ul>
+                {proposal.assumptions_json!.map((item, idx) => (
+                  <li key={idx}>{item}</li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          {(proposal.clarifying_questions_json?.length ?? 0) > 0 && (
+            <section className="card">
+              <h2 className="section-title">Clarifying Questions</h2>
+              <ul>
+                {proposal.clarifying_questions_json!.map((item, idx) => (
+                  <li key={idx}>{item}</li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          {(proposal.risk_flags_json?.length ?? 0) > 0 && (
+            <section className="card">
+              <h2 className="section-title">Risk Flags</h2>
+              <ul>
+                {proposal.risk_flags_json!.map((item, idx) => (
+                  <li key={idx}>{item}</li>
+                ))}
+              </ul>
+            </section>
+          )}
+        </div>
       )}
 
-      <div className="review-sections">
-        {(proposal.assumptions_json?.length ?? 0) > 0 && (
-          <section className="card">
-            <h2>Assumptions</h2>
-            <ul>
-              {proposal.assumptions_json!.map((item, idx) => (
-                <li key={idx}>{item}</li>
-              ))}
-            </ul>
-          </section>
-        )}
-
-        {(proposal.clarifying_questions_json?.length ?? 0) > 0 && (
-          <section className="card">
-            <h2>Clarifying Questions</h2>
-            <ul>
-              {proposal.clarifying_questions_json!.map((item, idx) => (
-                <li key={idx}>{item}</li>
-              ))}
-            </ul>
-          </section>
-        )}
-
-        {(proposal.risk_flags_json?.length ?? 0) > 0 && (
-          <section className="card">
-            <h2>Risk Flags</h2>
-            <ul>
-              {proposal.risk_flags_json!.map((item, idx) => (
-                <li key={idx}>{item}</li>
-              ))}
-            </ul>
-          </section>
-        )}
-      </div>
-
-      {proposal.generated_proposal && (
+      {/* Delivery */}
+      {proposal.status === "SENT" && (
         <section className="card">
-          <h2>Generated Proposal Draft</h2>
-          <div className="proposal-draft">{proposal.generated_proposal}</div>
-          <p className="hint">
-            This is a draft estimate pending final human review. It is not a binding
-            quote and does not include claims about permits or HOA approvals.
-          </p>
+          <h2 className="section-title">Delivery</h2>
+          <dl className="delivery-grid">
+            <div>
+              <dt>Status</dt>
+              <dd>Sent</dd>
+            </div>
+            <div>
+              <dt>Sent</dt>
+              <dd>{proposal.sent_at ? formatDateTime(proposal.sent_at) : "—"}</dd>
+            </div>
+          </dl>
         </section>
       )}
 
@@ -234,7 +283,7 @@ export default function ProposalReview({
 
         {proposal.status === "SENT" && proposal.sent_at && (
           <p className="sent-message">
-            ✓ Proposal Sent on {new Date(proposal.sent_at).toLocaleString()}.
+            ✓ Proposal Sent on {formatDateTime(proposal.sent_at)}.
           </p>
         )}
 

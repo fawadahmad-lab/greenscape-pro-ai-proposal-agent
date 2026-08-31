@@ -90,6 +90,15 @@ def generate_proposal(
         # Step 1: AI scope extraction (validated with Pydantic).
         scope = ai_service.extract_scope(proposal.site_walk_notes, catalog)
 
+        # Defensive guard: never silently persist an empty scope. This should
+        # be unreachable because extract_scope rejects empty scopes, but it
+        # keeps the data flow correct even if future changes weaken that.
+        if not scope.scope_items:
+            raise ValueError(
+                "The AI did not identify any concrete work from these notes. "
+                "Please review the notes and try again."
+            )
+
         # Step 2: Deterministic pricing.
         breakdown = pricing_service.build_pricing_breakdown(scope, catalog)
 
@@ -107,7 +116,11 @@ def generate_proposal(
         proposal.project_summary = scope.project_summary
         proposal.scope_json = [item.model_dump() for item in scope.scope_items]
         proposal.pricing_json = [item.model_dump() for item in breakdown.line_items]
-        proposal.estimated_total = Decimal(str(breakdown.estimated_total))
+        proposal.estimated_total = (
+            Decimal(str(breakdown.estimated_total))
+            if breakdown.estimated_total is not None
+            else None
+        )
         proposal.assumptions_json = scope.assumptions
         proposal.clarifying_questions_json = scope.clarifying_questions
         proposal.risk_flags_json = scope.risk_flags

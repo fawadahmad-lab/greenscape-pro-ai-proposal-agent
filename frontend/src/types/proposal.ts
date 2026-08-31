@@ -27,11 +27,12 @@ export interface PricedLineItem {
   catalog_item_name: string;
   category: string;
   unit: string;
-  unit_price: number;
+  unit_price: number | null;
   quantity: number | null;
-  line_total: number;
+  line_total: number | null;
   confidence: number;
   quantity_uncertain: boolean;
+  is_priced: boolean;
   notes: string;
 }
 
@@ -68,6 +69,6 @@ export const STATUS_LABELS: Record<ProposalStatus, string> = {
   GENERATING: "Generating",
   NEEDS_REVIEW: "Needs Review",
   APPROVED: "Approved",
-  SENT: "Sent",
+  SENT: "✓ Sent",
   FAILED: "Failed",
 };

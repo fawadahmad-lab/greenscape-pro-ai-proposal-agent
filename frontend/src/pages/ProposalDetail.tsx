@@ -60,7 +60,7 @@ export default function ProposalDetail() {
 
   return (
     <div>
-      <p>
+      <p className="back-link">
         <Link to="/">← Back to Dashboard</Link>
       </p>
       <div className="page-header">

@@ -13,6 +13,7 @@ const STATUS_CLASSES: Record<ProposalStatus, string> = {
 export default function StatusBadge({ status }: { status: ProposalStatus }) {
   return (
     <span className={`status-badge ${STATUS_CLASSES[status]}`}>
+      <span className="status-dot" aria-hidden="true" />
       {STATUS_LABELS[status]}
     </span>
   );

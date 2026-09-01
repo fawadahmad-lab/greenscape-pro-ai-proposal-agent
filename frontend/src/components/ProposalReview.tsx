@@ -1,5 +1,22 @@
+import { useState } from "react";
+import {
+  User,
+  MapPin,
+  FileText,
+  Camera,
+  Sparkles,
+  Send,
+  Check,
+  AlertTriangle,
+  ShieldAlert,
+  HelpCircle,
+  Truck,
+  BadgeCheck,
+} from "lucide-react";
 import StatusBadge from "./StatusBadge";
 import ProposalMarkdown from "./ProposalMarkdown";
+import ConfirmDialog from "./ConfirmDialog";
+import Button from "./Button";
 import type { Proposal, ProposalStatus } from "../types/proposal";
 
 interface ProposalReviewProps {
@@ -56,14 +73,21 @@ export default function ProposalReview({
   onSend,
   error,
 }: ProposalReviewProps) {
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const pricedItems = proposal.pricing_json ?? [];
   const tbdItems = pricedItems.filter((item) => !item.is_priced);
+  const hasScope = (proposal.scope_json?.length ?? 0) > 0;
 
   return (
     <div className="proposal-detail">
       {/* Client Information */}
       <section className="card">
-        <h2 className="section-title">Client Information</h2>
+        <div className="section-head">
+          <span className="section-icon">
+            <User size={18} />
+          </span>
+          <h2>Client Information</h2>
+        </div>
         <dl className="info-grid">
           <div>
             <dt>Client Name</dt>
@@ -76,12 +100,19 @@ export default function ProposalReview({
             </dd>
           </div>
           <div>
-            <dt>Address</dt>
-            <dd>{proposal.project_address}</dd>
+            <dt>Project Address</dt>
+            <dd>
+              <MapPin
+                size={14}
+                style={{ verticalAlign: "-2px", marginRight: 4 }}
+                aria-hidden="true"
+              />
+              {proposal.project_address}
+            </dd>
           </div>
           <div>
             <dt>Status</dt>
-            <dd>
+            <dd style={{ paddingTop: 2 }}>
               <StatusBadge status={proposal.status} />
             </dd>
           </div>
@@ -90,19 +121,29 @@ export default function ProposalReview({
 
       {/* Site Walk Notes */}
       <section className="card">
-        <h2 className="section-title">Site Walk Notes</h2>
+        <div className="section-head">
+          <span className="section-icon">
+            <Camera size={18} />
+          </span>
+          <h2>Original Site Walk Notes</h2>
+        </div>
         <div className="notes pre-wrap">{proposal.site_walk_notes}</div>
       </section>
 
       {/* Generated Proposal */}
       <section className="card">
-        <h2 className="section-title">Generated Proposal</h2>
+        <div className="section-head">
+          <span className="section-icon">
+            <FileText size={18} />
+          </span>
+          <h2>AI Generated Proposal</h2>
+        </div>
 
         {proposal.project_summary && (
           <p className="project-summary">{proposal.project_summary}</p>
         )}
 
-        {proposal.scope_json && proposal.scope_json.length > 0 && (
+        {hasScope && (
           <div className="table-scroll">
             <table className="detail-table">
               <thead>
@@ -116,7 +157,7 @@ export default function ProposalReview({
                 </tr>
               </thead>
               <tbody>
-                {proposal.scope_json.map((item, idx) => {
+                {proposal.scope_json!.map((item, idx) => {
                   const priced = proposal.pricing_json?.[idx];
                   return (
                     <tr key={idx}>
@@ -134,10 +175,16 @@ export default function ProposalReview({
                           </span>
                         )}
                       </td>
-                      <td>{formatQuantity(priced?.quantity ?? item.quantity)}</td>
+                      <td style={{ whiteSpace: "nowrap" }}>
+                        {formatQuantity(priced?.quantity ?? item.quantity)}
+                      </td>
                       <td>{priced?.unit ?? ""}</td>
-                      <td>{formatCurrency(priced?.unit_price ?? null)}</td>
-                      <td>{formatCurrency(priced?.line_total ?? null)}</td>
+                      <td style={{ whiteSpace: "nowrap" }}>
+                        {formatCurrency(priced?.unit_price ?? null)}
+                      </td>
+                      <td style={{ whiteSpace: "nowrap", fontWeight: 600 }}>
+                        {formatCurrency(priced?.line_total ?? null)}
+                      </td>
                     </tr>
                   );
                 })}
@@ -149,8 +196,10 @@ export default function ProposalReview({
         {proposal.estimated_total !== null &&
           proposal.estimated_total !== undefined && (
             <div className="total-row">
-              <strong>Estimated Investment — Priced Items</strong>
-              <strong>{formatCurrency(proposal.estimated_total)}</strong>
+              <span className="total-label">Estimated Investment — Priced Items</span>
+              <span className="total-value">
+                {formatCurrency(proposal.estimated_total)}
+              </span>
             </div>
           )}
 
@@ -163,6 +212,7 @@ export default function ProposalReview({
 
         {proposal.generated_proposal && (
           <div className="proposal-draft">
+            <div className="section-title">Proposal Content</div>
             <ProposalMarkdown content={proposal.generated_proposal} />
           </div>
         )}
@@ -176,7 +226,12 @@ export default function ProposalReview({
         <div className="review-sections">
           {(proposal.assumptions_json?.length ?? 0) > 0 && (
             <section className="card">
-              <h2 className="section-title">Assumptions</h2>
+              <div className="section-head">
+                <span className="section-icon">
+                  <ShieldAlert size={18} />
+                </span>
+                <h2>Assumptions</h2>
+              </div>
               <ul>
                 {proposal.assumptions_json!.map((item, idx) => (
                   <li key={idx}>{item}</li>
@@ -187,7 +242,12 @@ export default function ProposalReview({
 
           {(proposal.clarifying_questions_json?.length ?? 0) > 0 && (
             <section className="card">
-              <h2 className="section-title">Clarifying Questions</h2>
+              <div className="section-head">
+                <span className="section-icon">
+                  <HelpCircle size={18} />
+                </span>
+                <h2>Clarifying Questions</h2>
+              </div>
               <ul>
                 {proposal.clarifying_questions_json!.map((item, idx) => (
                   <li key={idx}>{item}</li>
@@ -198,7 +258,12 @@ export default function ProposalReview({
 
           {(proposal.risk_flags_json?.length ?? 0) > 0 && (
             <section className="card">
-              <h2 className="section-title">Risk Flags</h2>
+              <div className="section-head">
+                <span className="section-icon">
+                  <AlertTriangle size={18} />
+                </span>
+                <h2>Risk Flags</h2>
+              </div>
               <ul>
                 {proposal.risk_flags_json!.map((item, idx) => (
                   <li key={idx}>{item}</li>
@@ -212,85 +277,132 @@ export default function ProposalReview({
       {/* Delivery */}
       {proposal.status === "SENT" && (
         <section className="card">
-          <h2 className="section-title">Delivery</h2>
+          <div className="section-head">
+            <span className="section-icon">
+              <Truck size={18} />
+            </span>
+            <h2>Delivery</h2>
+          </div>
           <dl className="delivery-grid">
             <div>
               <dt>Status</dt>
               <dd>Sent</dd>
             </div>
             <div>
-              <dt>Sent</dt>
+              <dt>Sent At</dt>
               <dd>{proposal.sent_at ? formatDateTime(proposal.sent_at) : "—"}</dd>
             </div>
           </dl>
         </section>
       )}
 
-      {error && <div className="form-error">{error}</div>}
+      {error && (
+        <div className="error-state" role="alert">
+          {error}
+        </div>
+      )}
 
+      {/* Actions */}
       <section className="card action-bar">
         {proposal.status === "DRAFT" && (
-          <button
-            className="btn btn-primary"
-            onClick={onGenerate}
+          <Button
+            variant="primary"
+            size="lg"
+            loading={disabled}
             disabled={disabled || !canGenerate(proposal.status)}
+            onClick={onGenerate}
+            icon={<Sparkles size={19} />}
           >
             Generate Proposal with AI
-          </button>
+          </Button>
         )}
 
         {proposal.status === "GENERATING" && (
           <p className="generating-message">
-            Generating proposal with AI… please wait. This can take a short while.
+            <span className="btn-spinner" aria-hidden="true" /> Generating proposal
+            with AI… this can take a short while.
           </p>
         )}
 
         {proposal.status === "FAILED" && (
-          <div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <p className="error-message">
               Generation failed. The proposal was not left stuck; you can review the
               notes and retry generation.
             </p>
-            <button
-              className="btn btn-primary"
-              onClick={onGenerate}
-              disabled={disabled}
-            >
-              Retry Generation
-            </button>
+            <div>
+              <Button
+                variant="primary"
+                onClick={onGenerate}
+                loading={disabled}
+                disabled={disabled}
+                icon={<Sparkles size={18} />}
+              >
+                Retry Generation
+              </Button>
+            </div>
           </div>
         )}
 
         {proposal.status === "NEEDS_REVIEW" && (
-          <button
-            className="btn btn-success"
+          <Button
+            variant="success"
+            size="lg"
             onClick={onApprove}
+            loading={disabled}
             disabled={disabled || !canApprove(proposal.status)}
+            icon={<BadgeCheck size={19} />}
           >
             Approve Proposal
-          </button>
+          </Button>
         )}
 
         {proposal.status === "APPROVED" && (
-          <button
-            className="btn btn-primary"
-            onClick={onSend}
+          <Button
+            variant="primary"
+            size="lg"
+            onClick={() => setConfirmOpen(true)}
+            loading={disabled}
             disabled={disabled || !canSend(proposal.status)}
+            icon={<Send size={18} />}
           >
             Send Proposal Email
-          </button>
+          </Button>
         )}
 
-        {proposal.status === "SENT" && proposal.sent_at && (
+        {proposal.status === "SENT" && (
           <p className="sent-message">
-            ✓ Proposal Sent on {formatDateTime(proposal.sent_at)}.
+            <Check size={18} aria-hidden="true" />
+            Proposal Sent on{" "}
+            {proposal.sent_at ? formatDateTime(proposal.sent_at) : "the scheduled date"}.
           </p>
         )}
-
-        {proposal.status === "SENT" && !proposal.sent_at && (
-          <p className="sent-message">✓ Proposal Sent.</p>
-        )}
       </section>
+
+      {/* Send confirmation dialog */}
+      <ConfirmDialog
+        open={confirmOpen}
+        title="Send Proposal?"
+        confirmLabel="Send Proposal"
+        busy={disabled}
+        tone="primary"
+        onConfirm={() => {
+          onSend();
+          setConfirmOpen(false);
+        }}
+        onClose={() => setConfirmOpen(false)}
+      >
+        <p>
+          This will email the proposal to{" "}
+          <strong>
+            {proposal.client_name} ({proposal.client_email})
+          </strong>{" "}
+          for Proposal <strong>#{proposal.id}</strong>.
+        </p>
+        <p style={{ marginBottom: 0 }}>
+          Once sent, the proposal status will update to <strong>Sent</strong>.
+        </p>
+      </ConfirmDialog>
     </div>
   );
 }

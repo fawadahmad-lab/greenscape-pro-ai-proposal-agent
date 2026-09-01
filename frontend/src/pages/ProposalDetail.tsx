@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { ArrowLeft } from "lucide-react";
 import ProposalReview from "../components/ProposalReview";
 import StatusBadge from "../components/StatusBadge";
+import { SkeletonCard } from "../components/Loading";
 import { getProposal, generateProposal, approveProposal, sendProposal } from "../api/proposals";
 import type { Proposal } from "../types/proposal";
 
@@ -54,29 +56,67 @@ export default function ProposalDetail() {
     }
   }
 
-  if (loading) return <p>Loading proposal…</p>;
-  if (error && !proposal) return <div className="form-error">{error}</div>;
-  if (!proposal) return <p>Proposal not found.</p>;
+  if (loading) {
+    return (
+      <div>
+        <p className="back-link">
+          <Link to="/">
+            <ArrowLeft size={16} aria-hidden="true" /> Back to Dashboard
+          </Link>
+        </p>
+        <SkeletonCard count={2} />
+      </div>
+    );
+  }
+  if (error && !proposal)
+    return (
+      <div>
+        <p className="back-link">
+          <Link to="/">
+            <ArrowLeft size={16} aria-hidden="true" /> Back to Dashboard
+          </Link>
+        </p>
+        <div className="error-state" role="alert">
+          {error}
+        </div>
+      </div>
+    );
+  if (!proposal)
+    return (
+      <div>
+        <p className="back-link">
+          <Link to="/">
+            <ArrowLeft size={16} aria-hidden="true" /> Back to Dashboard
+          </Link>
+        </p>
+        <div className="error-state">Proposal not found.</div>
+      </div>
+    );
 
   return (
     <div>
       <p className="back-link">
-        <Link to="/">← Back to Dashboard</Link>
+        <Link to="/">
+          <ArrowLeft size={16} aria-hidden="true" /> Back to Dashboard
+        </Link>
       </p>
+
       <div className="page-header">
-        <h1>
-          Proposal #{proposal.id}{" "}
-          <span
-            style={{
-              display: "inline-flex",
-              verticalAlign: "middle",
-              marginLeft: 8,
-            }}
-          >
-            <StatusBadge status={proposal.status} />
-          </span>
-        </h1>
+        <div>
+          <h1 className="page-header-h1">Proposal #{proposal.id}</h1>
+          <p className="page-header-sub" style={{ marginTop: 6 }}>
+            Created {new Date(proposal.created_at).toLocaleDateString("en-US", {
+              year: "numeric",
+              month: "long",
+              day: "numeric",
+            })}
+          </p>
+        </div>
+        <div className="page-header-actions">
+          <StatusBadge status={proposal.status} />
+        </div>
       </div>
+
       <ProposalReview
         proposal={proposal}
         disabled={actionLoading}
